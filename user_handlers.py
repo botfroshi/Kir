@@ -58,13 +58,24 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE, t
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     state.clear_state(user.id)
-    db.get_or_create_user(user.id, user.username)
+
+    referred_by = None
+    if context.args:
+        arg = context.args[0]
+        if arg.startswith("ref_") and arg[4:].isdigit():
+            referred_by = int(arg[4:])
+
+    db_user = db.get_or_create_user(user.id, user.username, referred_by=referred_by)
 
     if not await check_force_join(update, context, user.id):
         return
 
+    badge = db.get_badge(db_user["total_spent"])
     await update.effective_message.reply_text(
-        f"سلام {user.first_name} 👋\nبه فروشگاه ما خوش آمدید.\nاز منوی زیر یکی از گزینه‌ها را انتخاب کنید:",
+        f"سلام {user.first_name} 👋\nبه فروشگاه ما خوش آمدید.\n\n"
+        f"👛 موجودی کیف پول: {db_user['balance']:,} تومان\n"
+        f"{badge} سطح کاربری شما\n\n"
+        f"از منوی زیر یکی از گزینه‌ها را انتخاب کنید:",
         reply_markup=keyboards.user_main_menu(is_admin(user.id)),
     )
 
@@ -183,9 +194,27 @@ async def buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    is_first_purchase = db.count_orders(user.id) == 0
+
     db.update_balance(user.id, -product["price"])
     db.create_order(user.id, product["id"], product["name"], product["price"])
+    db.add_total_spent(user.id, product["price"])
+    db.add_transaction(user.id, "purchase", -product["price"], f"خرید {product['name']}")
     await query.answer("خرید با موفقیت انجام شد ✅", show_alert=True)
+
+    if is_first_purchase and db_user.get("referred_by"):
+        referrer_id = db_user["referred_by"]
+        bonus = 20000
+        db.update_balance(referrer_id, bonus)
+        db.add_transaction(referrer_id, "referral_bonus", bonus, f"پاداش دعوت کاربر {user.id}")
+        try:
+            await context.bot.send_message(
+                referrer_id,
+                f"🤝 یکی از کاربرانی که با لینک شما عضو شده بود اولین خریدش را انجام داد!\n"
+                f"🎁 مبلغ {bonus:,} تومان به کیف پول شما اضافه شد.",
+            )
+        except TelegramError:
+            pass
 
     new_balance = db.get_user(user.id)["balance"]
     text = (
@@ -212,13 +241,52 @@ async def menu_account_callback(update: Update, context: ContextTypes.DEFAULT_TY
     db_user = db.get_or_create_user(user.id, user.username)
     await query.answer()
     uname = f"@{user.username}" if user.username else "ثبت نشده"
+    badge = db.get_badge(db_user["total_spent"])
+    referrals = db.count_referrals(user.id)
     text = (
         f"👤 <b>حساب کاربری شما</b>\n\n"
         f"نام کاربری: {uname}\n"
         f"آیدی عددی: <code>{user.id}</code>\n"
-        f"👛 موجودی کیف پول: {db_user['balance']:,} تومان"
+        f"👛 موجودی کیف پول: {db_user['balance']:,} تومان\n"
+        f"{badge} سطح کاربری (بر اساس {db_user['total_spent']:,} تومان خرید)\n"
+        f"🤝 تعداد دعوت‌شدگان: {referrals} نفر"
     )
     await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboards.back_button("back_main"))
+
+
+async def menu_referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+    bot_username = (await context.bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start=ref_{user.id}"
+    referrals = db.count_referrals(user.id)
+    text = (
+        f"🤝 <b>دعوت از دوستان</b>\n\n"
+        f"لینک اختصاصی شما:\n{link}\n\n"
+        f"تا الان {referrals} نفر با لینک شما عضو شده‌اند.\n"
+        f"به ازای اولین خرید هر کاربری که با لینک شما بیاید، جایزه نقدی به کیف پولتان اضافه می‌شود."
+    )
+    await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboards.back_button("back_main"))
+
+
+async def menu_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+    if not db.can_spin_today(user.id):
+        await query.message.edit_text(
+            "🎡 شما امروز قبلاً چرخ شانس را زده‌اید. فردا دوباره امتحان کنید!",
+            reply_markup=keyboards.back_button("back_main"),
+        )
+        return
+    prize = db.do_spin(user.id)
+    if prize > 0:
+        db.add_transaction(user.id, "spin", prize, "جایزه چرخ شانس روزانه")
+        text = f"🎉 تبریک! شما {prize:,} تومان جایزه بردید و به کیف پولتان اضافه شد."
+    else:
+        text = "😅 این‌بار جایزه‌ای نبردید. فردا دوباره شانستان را امتحان کنید!"
+    await query.message.edit_text(text, reply_markup=keyboards.back_button("back_main"))
 
 
 async def menu_wallet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -273,6 +341,50 @@ async def wallet_paid_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
 
 
+async def wallet_history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+    txs = db.get_transactions(user.id, limit=10)
+    if not txs:
+        text = "📜 هنوز هیچ تراکنشی در کیف پول شما ثبت نشده است."
+    else:
+        labels = {
+            "purchase": "🛒 خرید",
+            "charge": "➕ شارژ",
+            "referral_bonus": "🤝 پاداش دعوت",
+            "coupon": "🎟 کد تخفیف",
+            "spin": "🎡 چرخ شانس",
+        }
+        lines = []
+        for t in txs:
+            label = labels.get(t["type"], t["type"])
+            sign = "+" if t["amount"] >= 0 else ""
+            lines.append(f"{label}: {sign}{t['amount']:,} تومان — {t['description']}")
+        text = "📜 <b>۱۰ تراکنش اخیر شما:</b>\n\n" + "\n".join(lines)
+    await query.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboards.back_button("menu_wallet"))
+
+
+async def wallet_coupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+    state.set_state(user.id, "await_coupon_code")
+    await query.message.edit_text(
+        "کد تخفیف خود را ارسال کنید:", reply_markup=keyboards.back_button("menu_wallet")
+    )
+
+
+async def menu_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
+    state.set_state(user.id, "await_search_query")
+    await query.message.edit_text(
+        "نام محصول موردنظر خود را ارسال کنید:", reply_markup=keyboards.back_button("menu_products")
+    )
+
+
 async def menu_ticket_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
@@ -320,6 +432,45 @@ async def user_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             parse_mode=ParseMode.HTML,
             reply_markup=keyboards.confirm_charge_keyboard(),
         )
+        return True
+
+    if action == "await_coupon_code":
+        if not text:
+            await update.message.reply_text("لطفاً یک کد ارسال کنید.")
+            return True
+        ok, result = db.redeem_coupon(text, user.id)
+        state.clear_state(user.id)
+        if ok:
+            db.add_transaction(user.id, "coupon", result, f"استفاده از کد {text.upper().strip()}")
+            new_balance = db.get_user(user.id)["balance"]
+            await update.message.reply_text(
+                f"✅ کد تخفیف با موفقیت اعمال شد!\n💵 مبلغ هدیه: {result:,} تومان\n👛 موجودی جدید: {new_balance:,} تومان",
+                reply_markup=keyboards.back_button("back_main"),
+            )
+        else:
+            await update.message.reply_text(f"❌ {result}", reply_markup=keyboards.back_button("menu_wallet"))
+        return True
+
+    if action == "await_search_query":
+        if not text:
+            await update.message.reply_text("لطفاً یک عبارت برای جستجو ارسال کنید.")
+            return True
+        state.clear_state(user.id)
+        results = db.search_products(text)
+        if not results:
+            await update.message.reply_text(
+                f"هیچ محصولی با عبارت «{text}» پیدا نشد.",
+                reply_markup=keyboards.back_button("menu_products"),
+            )
+            return True
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        rows = []
+        for p in results:
+            icon = "✅" if p["stock_status"] == "available" else "❌"
+            style = "success" if p["stock_status"] == "available" else "danger"
+            rows.append([InlineKeyboardButton(f"{icon} {p['name']}", callback_data=f"prod_{p['id']}", style=style)])
+        rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="menu_products")])
+        await update.message.reply_text(f"نتایج جستجو برای «{text}»:", reply_markup=InlineKeyboardMarkup(rows))
         return True
 
     if action == "await_ticket_message":
