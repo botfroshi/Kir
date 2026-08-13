@@ -25,6 +25,8 @@ def user_main_menu(is_admin=False):
         [InlineKeyboardButton("🛍 محصولات", callback_data="menu_products", style="primary")],
         [InlineKeyboardButton("👤 حساب من", callback_data="menu_account", style="primary"),
          InlineKeyboardButton("💰 کیف پول من", callback_data="menu_wallet", style="primary")],
+        [InlineKeyboardButton("🎡 چرخ شانس روزانه", callback_data="menu_spin", style="success"),
+         InlineKeyboardButton("🤝 دعوت دوستان", callback_data="menu_referral", style="primary")],
         [InlineKeyboardButton("🎫 پشتیبانی / تیکت", callback_data="menu_ticket", style="primary")],
     ]
     if is_admin:
@@ -38,9 +40,11 @@ def back_button(callback_data):
 
 def categories_keyboard(prefix="cat"):
     cats = db.get_categories()
-    rows = []
+    rows = [[InlineKeyboardButton("🔍 جستجوی محصول", callback_data="menu_search", style="primary")]]
     for c in cats:
-        rows.append([InlineKeyboardButton(c["name"], callback_data=f"{prefix}_{c['id']}", style="primary")])
+        label = f"⭐ {c['name']}" if c.get("is_special") else c["name"]
+        style = "success" if c.get("is_special") else "primary"
+        rows.append([InlineKeyboardButton(label, callback_data=f"{prefix}_{c['id']}", style=style)])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
     return InlineKeyboardMarkup(rows)
 
@@ -69,6 +73,8 @@ def product_detail_keyboard(product):
 def wallet_menu_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ شارژ کیف پول", callback_data="wallet_charge", style="success")],
+        [InlineKeyboardButton("🎟 وارد کردن کد تخفیف", callback_data="wallet_coupon", style="primary")],
+        [InlineKeyboardButton("📜 تاریخچه تراکنش‌ها", callback_data="wallet_history", style="primary")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")],
     ])
 
@@ -100,17 +106,50 @@ def admin_main_menu():
         [InlineKeyboardButton("🎧 تنظیم آیدی پشتیبانی", callback_data="admin_support", style="primary")],
         [InlineKeyboardButton("🔒 عضویت اجباری", callback_data="admin_forcejoin", style="primary")],
         [InlineKeyboardButton("💰 درخواست‌های شارژ کیف پول", callback_data="admin_charges", style="success")],
+        [InlineKeyboardButton("🎟 مدیریت کدهای تخفیف", callback_data="admin_coupons", style="success"),
+         InlineKeyboardButton("📊 آمار فروش", callback_data="admin_stats", style="success")],
+        [InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast", style="success")],
         [InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data="back_main", style="danger")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def admin_coupons_menu():
+    coupons = db.get_all_coupons()
+    rows = [[InlineKeyboardButton("➕ ساخت کد تخفیف جدید", callback_data="admin_addcoupon", style="success")]]
+    for c in coupons:
+        label = f"{c['code']} | {c['amount']:,} تومان | {c['used_count']}/{c['max_uses']}"
+        rows.append([
+            InlineKeyboardButton(label, callback_data=f"admin_coupon_{c['code']}", style="primary"),
+            InlineKeyboardButton("🗑", callback_data=f"admin_delcoupon_{c['code']}", style="danger"),
+        ])
+    rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_home")])
+    return InlineKeyboardMarkup(rows)
+
+
+def category_type_choice_keyboard():
+    """بعد از دریافت نام دسته، نوع دسته (ویژه/عادی) را می‌پرسد."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⭐ دسته ویژه", callback_data="admin_newcat_special_yes", style="success")],
+        [InlineKeyboardButton("📦 دسته عادی", callback_data="admin_newcat_special_no", style="primary")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="admin_categories", style="danger")],
+    ])
+
+
+def broadcast_confirm_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ ارسال برای همه", callback_data="admin_broadcast_send", style="success")],
+        [InlineKeyboardButton("❌ انصراف", callback_data="admin_broadcast_cancel", style="danger")],
+    ])
 
 
 def admin_categories_menu():
     cats = db.get_categories()
     rows = [[InlineKeyboardButton("➕ افزودن دسته", callback_data="admin_addcat", style="success")]]
     for c in cats:
+        prefix = "⭐" if c.get("is_special") else "✏️"
         rows.append([
-            InlineKeyboardButton(f"✏️ {c['name']}", callback_data=f"admin_editcat_{c['id']}", style="primary"),
+            InlineKeyboardButton(f"{prefix} {c['name']}", callback_data=f"admin_editcat_{c['id']}", style="primary"),
             InlineKeyboardButton("🗑", callback_data=f"admin_delcat_{c['id']}", style="danger"),
         ])
     rows.append([InlineKeyboardButton("🔙 بازگشت", callback_data="admin_home")])
