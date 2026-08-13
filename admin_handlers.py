@@ -3,6 +3,8 @@
 هندلرهای مربوط به پنل ادمین.
 """
 
+import asyncio
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -62,6 +64,28 @@ async def admin_addcat_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+async def admin_newcat_special_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پس از دریافت نام دسته جدید، نوع آن (ویژه/عادی) را ذخیره و دسته را می‌سازد."""
+    if not await guard(update):
+        return
+    query = update.callback_query
+    user_id = query.from_user.id
+    st = state.get_state(user_id)
+    if not st or st.get("action") != "admin_add_category_special":
+        await query.answer()
+        return
+    name = st["data"]["name"]
+    is_special = 1 if query.data == "admin_newcat_special_yes" else 0
+    db.add_category(name, is_special=is_special)
+    state.clear_state(user_id)
+    await query.answer("دسته اضافه شد ✅")
+    type_label = "⭐ ویژه" if is_special else "📦 عادی"
+    await query.message.edit_text(
+        f"✅ دسته «{name}» با نوع {type_label} اضافه شد.",
+        reply_markup=keyboards.admin_categories_menu(),
+    )
+
+
 async def admin_editcat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await guard(update):
         return
@@ -72,8 +96,9 @@ async def admin_editcat_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not category:
         await query.message.edit_text("این دسته یافت نشد.", reply_markup=keyboards.admin_categories_menu())
         return
+    type_label = "⭐ ویژه" if category.get("is_special") else "📦 عادی"
     await query.message.edit_text(
-        f"دسته انتخاب شده: {category['name']}",
+        f"دسته انتخاب شده: {category['name']}\nنوع دسته: {type_label}",
         reply_markup=keyboards.admin_edit_category_keyboard(category_id),
     )
 
@@ -512,6 +537,7 @@ async def admin_charge_decision_callback(update: Update, context: ContextTypes.D
 
     if approve:
         db.update_balance(req["telegram_id"], req["amount"])
+        db.add_transaction(req["telegram_id"], "charge", req["amount"], "شارژ کیف پول توسط ادمین")
         db.update_charge_request_status(request_id, "approved")
         await query.answer("شارژ تایید و به حساب کاربر اضافه شد ✅", show_alert=True)
         try:
@@ -545,6 +571,140 @@ async def admin_charge_decision_callback(update: Update, context: ContextTypes.D
 
 
 # ---------------------------------------------------------------------------
+# پیام همگانی (Broadcast)
+# ---------------------------------------------------------------------------
+
+async def admin_broadcast_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    state.set_state(query.from_user.id, "admin_broadcast_message")
+    await query.message.edit_text(
+        "متن پیامی که می‌خواهید برای همه کاربران ربات ارسال شود را بفرستید:",
+        reply_markup=keyboards.back_button("admin_home"),
+    )
+
+
+async def admin_broadcast_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    user_id = query.from_user.id
+    st = state.get_state(user_id)
+    if not st or st.get("action") != "admin_broadcast_confirm":
+        await query.answer()
+        return
+    text = st["data"]["text"]
+    state.clear_state(user_id)
+    await query.answer("در حال ارسال پیام برای همه کاربران...", show_alert=True)
+    await query.message.edit_text("⏳ در حال ارسال پیام همگانی، لطفاً صبر کنید...")
+
+    users = db.get_all_users()
+    success, failed = 0, 0
+    for u in users:
+        try:
+            await context.bot.send_message(u["telegram_id"], text)
+            success += 1
+        except TelegramError:
+            failed += 1
+        await asyncio.sleep(0.05)
+
+    await query.message.edit_text(
+        f"✅ پیام همگانی ارسال شد.\n\nموفق: {success}\nناموفق (کاربر ربات را بلاک کرده یا حذف شده): {failed}",
+        reply_markup=keyboards.back_button("admin_home"),
+    )
+
+
+async def admin_broadcast_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    state.clear_state(query.from_user.id)
+    await query.answer("لغو شد.")
+    await query.message.edit_text("⚙️ پنل ادمین:", reply_markup=keyboards.admin_main_menu())
+
+
+# ---------------------------------------------------------------------------
+# کدهای تخفیف
+# ---------------------------------------------------------------------------
+
+async def admin_coupons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    await query.message.edit_text("🎟 مدیریت کدهای تخفیف:", reply_markup=keyboards.admin_coupons_menu())
+
+
+async def admin_addcoupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    state.set_state(query.from_user.id, "admin_addcoupon_code")
+    await query.message.edit_text(
+        "کد تخفیف را ارسال کنید (بدون فاصله، مثال: WELCOME20):",
+        reply_markup=keyboards.back_button("admin_coupons"),
+    )
+
+
+async def admin_coupon_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    code = query.data.split("_", 2)[-1]
+    coupon = db.get_coupon(code)
+    await query.answer()
+    if not coupon:
+        await query.message.edit_text("این کد یافت نشد.", reply_markup=keyboards.admin_coupons_menu())
+        return
+    text = (
+        f"🎟 کد: <code>{coupon['code']}</code>\n"
+        f"💵 مبلغ هدیه: {coupon['amount']:,} تومان\n"
+        f"📊 استفاده‌شده: {coupon['used_count']} از {coupon['max_uses']}"
+    )
+    await query.message.edit_text(
+        text, parse_mode=ParseMode.HTML, reply_markup=keyboards.back_button("admin_coupons")
+    )
+
+
+async def admin_delcoupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    code = query.data.split("_", 2)[-1]
+    db.delete_coupon(code)
+    await query.answer("کد تخفیف حذف شد ✅", show_alert=True)
+    await query.message.edit_text("🎟 مدیریت کدهای تخفیف:", reply_markup=keyboards.admin_coupons_menu())
+
+
+# ---------------------------------------------------------------------------
+# آمار فروش
+# ---------------------------------------------------------------------------
+
+async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard(update):
+        return
+    query = update.callback_query
+    await query.answer()
+    stats = db.get_sales_stats()
+    top_lines = "\n".join(
+        f"  • {p['product_name']}: {p['cnt']} فروش ({p['total']:,} تومان)"
+        for p in stats["top_products"]
+    ) or "  هنوز فروشی ثبت نشده."
+    text = (
+        f"📊 <b>آمار فروش</b>\n\n"
+        f"🗓 امروز: {stats['today_orders']} سفارش | {stats['today_revenue']:,} تومان\n"
+        f"📦 مجموع کل: {stats['total_orders']} سفارش | {stats['total_revenue']:,} تومان\n\n"
+        f"🏆 پرفروش‌ترین محصولات:\n{top_lines}"
+    )
+    await query.message.edit_text(
+        text, parse_mode=ParseMode.HTML, reply_markup=keyboards.back_button("admin_home")
+    )
+
+
+# ---------------------------------------------------------------------------
 # هندلر متن آزاد ادمین (بر اساس وضعیت state)
 # ---------------------------------------------------------------------------
 
@@ -567,9 +727,11 @@ async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not text:
             await update.message.reply_text("نام دسته نمی‌تواند خالی باشد.")
             return True
-        db.add_category(text)
-        state.clear_state(user.id)
-        await update.message.reply_text(f"✅ دسته «{text}» اضافه شد.", reply_markup=keyboards.admin_categories_menu())
+        state.set_state(user.id, "admin_add_category_special", {"name": text})
+        await update.message.reply_text(
+            f"نام دسته: «{text}»\n\nنوع این دسته را انتخاب کنید:",
+            reply_markup=keyboards.category_type_choice_keyboard(),
+        )
         return True
 
     if action == "admin_edit_category_name":
@@ -694,6 +856,52 @@ async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         db.set_setting("force_join_link", text)
         state.clear_state(user.id)
         await update.message.reply_text("✅ تنظیمات عضویت اجباری ذخیره شد.", reply_markup=keyboards.admin_forcejoin_keyboard())
+        return True
+
+    if action == "admin_broadcast_message":
+        if not text:
+            await update.message.reply_text("پیام نمی‌تواند خالی باشد.")
+            return True
+        state.set_state(user.id, "admin_broadcast_confirm", {"text": text})
+        await update.message.reply_text(
+            f"پیش‌نمایش پیام همگانی:\n\n{text}\n\n"
+            f"این پیام برای همه کاربران ثبت‌شده در ربات ارسال می‌شود. مطمئنید؟",
+            reply_markup=keyboards.broadcast_confirm_keyboard(),
+        )
+        return True
+
+    if action == "admin_addcoupon_code":
+        code = text.upper().strip()
+        if not code or " " in code:
+            await update.message.reply_text("کد نامعتبر است. یک کد بدون فاصله ارسال کنید (مثال: WELCOME20).")
+            return True
+        if db.get_coupon(code):
+            await update.message.reply_text("این کد قبلاً وجود دارد. یک کد دیگر انتخاب کنید.")
+            return True
+        data["code"] = code
+        state.set_state(user.id, "admin_addcoupon_amount", data)
+        await update.message.reply_text("مبلغ هدیه این کد را به تومان و فقط عدد ارسال کنید:")
+        return True
+
+    if action == "admin_addcoupon_amount":
+        if not text.isdigit() or int(text) <= 0:
+            await update.message.reply_text("لطفاً فقط یک عدد صحیح و مثبت ارسال کنید.")
+            return True
+        data["amount"] = int(text)
+        state.set_state(user.id, "admin_addcoupon_maxuses", data)
+        await update.message.reply_text("حداکثر تعداد دفعات استفاده از این کد را ارسال کنید (مثال: 50):")
+        return True
+
+    if action == "admin_addcoupon_maxuses":
+        if not text.isdigit() or int(text) <= 0:
+            await update.message.reply_text("لطفاً فقط یک عدد صحیح و مثبت ارسال کنید.")
+            return True
+        db.create_coupon(data["code"], data["amount"], int(text))
+        state.clear_state(user.id)
+        await update.message.reply_text(
+            f"✅ کد تخفیف «{data['code']}» با مبلغ {data['amount']:,} تومان و سقف {text} استفاده ساخته شد.",
+            reply_markup=keyboards.admin_coupons_menu(),
+        )
         return True
 
     return False
