@@ -366,6 +366,20 @@ async def admin_setbalance_callback(update: Update, context: ContextTypes.DEFAUL
     )
 
 
+async def admin_replyuser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """پیام مستقیم ادمین به یک کاربر خاص - از پروفایل کاربر یا از زیر پیام تیکت قابل استفاده است."""
+    if not await guard(update):
+        return
+    query = update.callback_query
+    telegram_id = int(query.data.split("_")[-1])
+    await query.answer()
+    state.set_state(query.from_user.id, "admin_reply_message", {"target_id": telegram_id})
+    await query.message.reply_text(
+        f"متن پیامی که می‌خواهید مستقیماً برای کاربر <code>{telegram_id}</code> ارسال شود را بفرستید:",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 # ---------------------------------------------------------------------------
 # شماره کارت
 # ---------------------------------------------------------------------------
@@ -902,6 +916,21 @@ async def admin_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             f"✅ کد تخفیف «{data['code']}» با مبلغ {data['amount']:,} تومان و سقف {text} استفاده ساخته شد.",
             reply_markup=keyboards.admin_coupons_menu(),
         )
+        return True
+
+    if action == "admin_reply_message":
+        target_id = data.get("target_id")
+        if not text or not target_id:
+            await update.message.reply_text("پیام نمی‌تواند خالی باشد.")
+            return True
+        state.clear_state(user.id)
+        try:
+            await context.bot.send_message(target_id, f"💬 پیام از پشتیبانی:\n\n{text}")
+            await update.message.reply_text("✅ پیام برای کاربر ارسال شد.")
+        except TelegramError:
+            await update.message.reply_text(
+                "❌ ارسال پیام ناموفق بود (احتمالاً کاربر ربات را بلاک کرده یا هرگز /start نزده است)."
+            )
         return True
 
     return False
