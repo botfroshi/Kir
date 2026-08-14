@@ -17,4 +17,3 @@ def get_state(telegram_id):
 
 def clear_state(telegram_id):
     _states.pop(telegram_id, None)
-    
