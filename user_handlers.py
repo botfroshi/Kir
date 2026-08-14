@@ -486,6 +486,10 @@ async def user_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         uname = f"@{user.username}" if user.username else "بدون‌یوزرنیم"
         support_id = db.get_setting("support_id", "")
         support_line = f"\n\nآیدی پشتیبانی جهت پیگیری: {support_id}" if support_id else ""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        reply_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("💬 پاسخ به این کاربر", callback_data=f"admin_replyuser_{user.id}", style="success")
+        ]])
         for admin_id in ADMIN_IDS:
             try:
                 await context.bot.send_message(
@@ -494,6 +498,7 @@ async def user_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     f"از طرف: {uname}\n"
                     f"آیدی عددی: {user.id}\n\n"
                     f"متن پیام:\n{text}" + support_line,
+                    reply_markup=reply_kb,
                 )
             except TelegramError:
                 pass
