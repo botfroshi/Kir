@@ -225,6 +225,7 @@ def admin_users_list_keyboard(users, page=0, per_page=10):
 def admin_user_manage_keyboard(telegram_id):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏️ ویرایش موجودی کیف پول", callback_data=f"admin_setbalance_{telegram_id}", style="primary")],
+        [InlineKeyboardButton("💬 ارسال پیام به این کاربر", callback_data=f"admin_replyuser_{telegram_id}", style="success")],
         [InlineKeyboardButton("🔙 بازگشت به لیست کاربران", callback_data="admin_users")],
     ])
 
