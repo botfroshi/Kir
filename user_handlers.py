@@ -204,7 +204,7 @@ async def buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if is_first_purchase and db_user.get("referred_by"):
         referrer_id = db_user["referred_by"]
-        bonus = 20000
+        bonus = 2000
         db.update_balance(referrer_id, bonus)
         db.add_transaction(referrer_id, "referral_bonus", bonus, f"پاداش دعوت کاربر {user.id}")
         try:
